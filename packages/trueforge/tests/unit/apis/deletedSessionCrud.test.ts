@@ -5,6 +5,7 @@ import { createClient } from 'redis';
 import { createLogger } from 'winston';
 import { createSessionsRouter } from '../../../src/apis/sessions';
 import { createTurnsRouter } from '../../../src/apis/turns';
+import { TrueForgeAuthorizer } from '../../../src/auth/authorizer';
 import { STANDALONE_REQUEST_CONTEXT } from '../../../src/auth/identity';
 import { McpServerWithAuthStore } from '../../../src/db/McpServerWithAuthStore';
 import { migrateSqliteToLatest } from '../../../src/db/migrateSqlite';
@@ -47,13 +48,14 @@ describe('public CRUD after session deletion', () => {
         activeTurns,
         resolveModelProviderStore: () => modelProviderStore,
         resolveMcpServerStore: () => mcpServerStore,
-        skillStore,
+        resolveSkillStore: () => skillStore,
         resolveAgentStore: () => agentStore,
-        sandboxProviderStore,
+        resolveSandboxProviderStore: () => sandboxProviderStore,
         redis: createClient(),
         requestReplyRouter: new RequestReplyRouter(),
         resolveRequestContext: () => STANDALONE_REQUEST_CONTEXT,
         logger: createLogger({ silent: true }),
+        authorizer: new TrueForgeAuthorizer(),
       }),
     );
     app.route(
@@ -64,12 +66,13 @@ describe('public CRUD after session deletion', () => {
         activeTurns,
         resolveModelProviderStore: () => modelProviderStore,
         resolveMcpServerStore: () => mcpServerStore,
-        skillStore,
+        resolveSkillStore: () => skillStore,
         resolveAgentStore: () => agentStore,
         eventSubscriptions: new EventSubscriptionRegistry(undefined),
-        sandboxProviderStore,
+        resolveSandboxProviderStore: () => sandboxProviderStore,
         logger: createLogger({ silent: true }),
         resolveRequestContext: () => STANDALONE_REQUEST_CONTEXT,
+        authorizer: new TrueForgeAuthorizer(),
       }),
     );
 
@@ -91,6 +94,7 @@ describe('public CRUD after session deletion', () => {
       custom: null,
       metadata: {},
       external_id: null,
+      source: null,
     });
     expect((await app.request('/s1', { method: 'DELETE' })).status).toBe(204);
 

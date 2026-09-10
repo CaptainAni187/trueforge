@@ -1,6 +1,6 @@
 {
     "name": "@truefoundry/trueforge-sdk",
-    "version": "0.1.4-rc.0",
+    "version": "0.1.4-rc.2",
     "private": false,
     "type": "commonjs",
     "main": "./dist/cjs/index.js",
@@ -32,6 +32,17 @@
                 "default": "./dist/cjs/serialization/index.js"
             },
             "default": "./dist/cjs/serialization/index.js"
+        },
+        "./internal": {
+            "import": {
+                "types": "./dist/esm/api/resources/internal/exports.d.mts",
+                "default": "./dist/esm/api/resources/internal/exports.mjs"
+            },
+            "require": {
+                "types": "./dist/cjs/api/resources/internal/exports.d.ts",
+                "default": "./dist/cjs/api/resources/internal/exports.js"
+            },
+            "default": "./dist/cjs/api/resources/internal/exports.js"
         },
         "./agents": {
             "import": {
@@ -175,17 +186,6 @@
                 "default": "./dist/cjs/api/resources/catalogs/resources/skills/exports.js"
             },
             "default": "./dist/cjs/api/resources/catalogs/resources/skills/exports.js"
-        },
-        "./internal": {
-            "import": {
-                "types": "./dist/esm/api/resources/internal/exports.d.mts",
-                "default": "./dist/esm/api/resources/internal/exports.mjs"
-            },
-            "require": {
-                "types": "./dist/cjs/api/resources/internal/exports.d.ts",
-                "default": "./dist/cjs/api/resources/internal/exports.js"
-            },
-            "default": "./dist/cjs/api/resources/internal/exports.js"
         },
         "./internal/metrics": {
             "import": {

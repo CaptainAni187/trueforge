@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { AgentDetailsPage } from '@/atoms/agent-details/AgentDetailsPage.js';
 import { AgentSessions } from '@/atoms/agent-details/AgentSessions.js';
@@ -11,12 +11,23 @@ import type {
   AgentDetail,
   AgentMetricsServer,
   CodeSnippet,
+  ScheduleServer,
   Session,
   SessionEventItem,
   SessionListEntry,
 } from '@/server/types.js';
 import { SlotsProvider, type SlotOverrides } from '@/theme/SlotsProvider.js';
-import { createMockAgentUIServer } from '../server/mockServer.js';
+import { createMockAgentUIServer, createMockScheduleServer } from '../server/mockServer.js';
+
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function showModal() {
+    this.setAttribute('open', '');
+  };
+  HTMLDialogElement.prototype.close = function close() {
+    this.removeAttribute('open');
+    this.dispatchEvent(new Event('close'));
+  };
+});
 
 const detail: AgentDetail = {
   agentId: 'agent-1',
@@ -75,8 +86,10 @@ function renderPage({
   })),
   withSessions = true,
   metrics,
+  schedules,
   overrides,
   initialEntries = ['/library/agent-1'],
+  serverOverrides,
 }: {
   getAgent?: () => Promise<AgentDetail>;
   getCodeSnippets?: () => Promise<CodeSnippet[]>;
@@ -85,13 +98,17 @@ function renderPage({
   getSession?: () => Promise<Session>;
   withSessions?: boolean;
   metrics?: AgentMetricsServer;
+  schedules?: ScheduleServer;
   overrides?: SlotOverrides;
   initialEntries?: string[];
+  serverOverrides?: Parameters<typeof createMockAgentUIServer>[0];
 } = {}) {
   const server = createMockAgentUIServer({
     getSession,
     ...(withSessions ? { sessions: { getAgent, getCodeSnippets, listSessions, listSessionEvents } } : {}),
     ...(metrics == null ? {} : { metrics }),
+    ...(schedules == null ? {} : { schedules }),
+    ...serverOverrides,
   });
   render(
     <MemoryRouter initialEntries={initialEntries}>
@@ -104,7 +121,7 @@ function renderPage({
       </SlotsProvider>
     </MemoryRouter>,
   );
-  return { getAgent, getCodeSnippets, listSessions, listSessionEvents, getSession };
+  return { getAgent, getCodeSnippets, listSessions, listSessionEvents, getSession, server };
 }
 
 describe('AgentDetailsPage', () => {
@@ -115,11 +132,31 @@ describe('AgentDetailsPage', () => {
   it('loads Overview and renders agent details', async () => {
     const { getAgent } = renderPage();
 
-    expect(await screen.findByRole('heading', { name: 'release-notes-writer' })).toBeInTheDocument();
+    expect(await screen.findByText('release-notes-writer')).toBeInTheDocument();
     expect(await screen.findByText('Write concise release notes.')).toBeInTheDocument();
     expect(await screen.findByText('github')).toBeInTheDocument();
     expect(await screen.findByText('release-writing')).toBeInTheDocument();
     expect(getAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows overflow actions (Edit in menu, not a standalone Edit button) and deletes after confirm', async () => {
+    const deleteAgent = vi.fn(async () => {});
+    renderPage({ serverOverrides: { deleteAgent } });
+
+    expect(await screen.findByRole('button', { name: 'Try agent' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit agent' })).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Actions for release-notes-writer' }));
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Clone' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
+
+    expect(screen.getByRole('dialog', { name: 'Delete agent' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      expect(deleteAgent).toHaveBeenCalledWith({ agentName: 'release-notes-writer' });
+    });
   });
 
   it('renders tab bodies through SlotProvider overrides', async () => {
@@ -158,9 +195,39 @@ describe('AgentDetailsPage', () => {
     expect(screen.getByText('Metrics deep link')).toBeInTheDocument();
   });
 
+  it('shows an agent-scoped Schedules tab when supported', async () => {
+    renderPage({
+      schedules: createMockScheduleServer(),
+      overrides: {
+        SchedulesPage: ({ agentId }) => <div>Schedules for {agentId}</div>,
+      },
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Actions for release-notes-writer' }));
+    expect(screen.queryByRole('menuitem', { name: 'Manage Schedules' })).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Schedules' }));
+    expect(screen.getByText('Schedules for agent-1')).toBeInTheDocument();
+    expect(new URL(window.location.href).searchParams.get('tab')).toBe('schedules');
+    expect(new URL(window.location.href).searchParams.get('agent')).toBeNull();
+  });
+
+  it('opens the create schedule drawer after redirecting from + Schedule', async () => {
+    window.history.replaceState(null, '', '/library/agent-1?agentId=agent-1&tab=schedules&isNew=true');
+    renderPage({
+      initialEntries: ['/library/agent-1?agentId=agent-1&tab=schedules&isNew=true'],
+      schedules: createMockScheduleServer(),
+    });
+
+    expect(await screen.findByRole('heading', { name: 'New Schedule' })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(new URL(window.location.href).searchParams.get('isNew')).toBeNull();
+    });
+  });
+
   it('loads code snippets lazily and retains them across tab changes', async () => {
     const { getCodeSnippets } = renderPage();
-    await screen.findByRole('heading', { name: 'release-notes-writer' });
+    await screen.findByText('release-notes-writer');
     expect(getCodeSnippets).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Use In Code' }));
@@ -176,13 +243,25 @@ describe('AgentDetailsPage', () => {
 
   it('loads the Sessions tab list scoped to the agent', async () => {
     const { listSessions } = renderPage();
-    await screen.findByRole('heading', { name: 'release-notes-writer' });
+    await screen.findByText('release-notes-writer');
     fireEvent.click(screen.getByRole('tab', { name: 'Sessions' }));
     expect(await screen.findByText('Release notes draft')).toBeInTheDocument();
     expect(screen.getByText('Select a session to view details')).toBeInTheDocument();
     expect(listSessions).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: 'agent-1', order: 'desc', limit: 20 }),
     );
+  });
+
+  it('shows a single empty screen when the agent has no sessions', async () => {
+    renderPage({
+      listSessions: vi.fn(async () => ({ data: [] })),
+    });
+    await screen.findByText('release-notes-writer');
+    fireEvent.click(screen.getByRole('tab', { name: 'Sessions' }));
+    expect(await screen.findByText('No Sessions Found')).toBeInTheDocument();
+    expect(screen.getByText('There are no sessions available at the moment.')).toBeInTheDocument();
+    expect(screen.queryByText('Select a session to view details')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Resize session list')).not.toBeInTheDocument();
   });
 
   it('ignores a stale list response after the agent filter changes', async () => {
@@ -240,7 +319,7 @@ describe('AgentDetailsPage', () => {
       return { data: sessionRows, nextPageToken: 'next-page' };
     });
     renderPage({ listSessions });
-    await screen.findByRole('heading', { name: 'release-notes-writer' });
+    await screen.findByText('release-notes-writer');
     fireEvent.click(screen.getByRole('tab', { name: 'Sessions' }));
     expect(await screen.findByText('Release notes draft')).toBeInTheDocument();
 
@@ -293,7 +372,7 @@ describe('AgentDetailsPage', () => {
       '/?agentId=agent-1&tab=sessions&sessionId=sess-1&view=sessions&s_tw=2592000000',
     );
     renderPage({ initialEntries: ['/?agentId=agent-1&tab=sessions&sessionId=sess-1&view=sessions&s_tw=2592000000'] });
-    await screen.findByRole('heading', { name: 'release-notes-writer' });
+    await screen.findByText('release-notes-writer');
 
     fireEvent.keyDown(window, { key: 'Escape' });
 
@@ -309,7 +388,7 @@ describe('AgentDetailsPage', () => {
     const { getSession, listSessionEvents } = renderPage({
       overrides: { AgentSessionTimelineContainer: () => <div>timeline-body</div> },
     });
-    await screen.findByRole('heading', { name: 'release-notes-writer' });
+    await screen.findByText('release-notes-writer');
     fireEvent.click(screen.getByRole('tab', { name: 'Sessions' }));
     fireEvent.click(await screen.findByText('Release notes draft'));
     await waitFor(() => {
@@ -328,7 +407,7 @@ describe('AgentDetailsPage', () => {
         ),
       },
     });
-    await screen.findByRole('heading', { name: 'release-notes-writer' });
+    await screen.findByText('release-notes-writer');
     fireEvent.click(screen.getByRole('tab', { name: 'Sessions' }));
     fireEvent.click(await screen.findByText('Release notes draft'));
 

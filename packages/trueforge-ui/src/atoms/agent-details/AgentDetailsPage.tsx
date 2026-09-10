@@ -2,8 +2,13 @@
 
 import { Suspense, useCallback, useEffect, useState } from 'react';
 import { useSessionShareSearch } from '../../hooks/useSessionShareSearch.js';
-import { useOptionalAgentMetricsServer, useOptionalAgentSessionsServer } from '../../server/ServerContext.js';
+import {
+  useOptionalAgentMetricsServer,
+  useOptionalAgentSessionsServer,
+  useOptionalScheduleServer,
+} from '../../server/ServerContext.js';
 import { useShellMode } from '../../server/ShellModeContext.js';
+import { isMetricsChromeEnabled, isSchedulesChromeEnabled } from '../../server/serverChrome.js';
 import type { AgentDetail, CodeSnippet } from '../../server/types.js';
 import { useSlot } from '../../theme/SlotsProvider.js';
 import { libraryAgentTabFromSearch } from '../../utils/sessionShareUrl.js';
@@ -13,16 +18,23 @@ import type { AgentDetailsPageProps } from './types.js';
 export function AgentDetailsPage({ agentId }: AgentDetailsPageProps) {
   const sessionsServer = useOptionalAgentSessionsServer();
   const metricsServer = useOptionalAgentMetricsServer();
+  const scheduleServer = useOptionalScheduleServer();
   const shell = useShellMode();
   const share = useSessionShareSearch();
   const { updateShareSearch } = share;
   const requestedTab = libraryAgentTabFromSearch(share, agentId);
-  const activeTab = requestedTab === 'metrics' && metricsServer == null ? 'overview' : requestedTab;
+  const showMetrics = isMetricsChromeEnabled({ metrics: metricsServer });
+  const showSchedules = isSchedulesChromeEnabled({ schedules: scheduleServer });
+  const activeTab =
+    (requestedTab === 'metrics' && !showMetrics) || (requestedTab === 'schedules' && !showSchedules)
+      ? 'overview'
+      : requestedTab;
   const AgentDetailsHeader = useSlot('AgentDetailsHeader');
   const AgentDetailsTabs = useSlot('AgentDetailsTabs');
   const AgentDetailsUnavailable = useSlot('AgentDetailsUnavailable');
   const AgentOverview = useSlot('AgentOverview');
   const AgentSessions = useSlot('AgentSessions');
+  const SchedulesPage = useSlot('SchedulesPage');
   const AgentMetrics = useSlot('AgentMetrics');
   const AgentCodeSnippets = useSlot('AgentCodeSnippets');
   const [detail, setDetail] = useState<AgentDetail>();
@@ -112,6 +124,8 @@ export function AgentDetailsPage({ agentId }: AgentDetailsPageProps) {
     content = <AgentOverview detail={detail} />;
   } else if (activeTab === 'sessions') {
     content = <AgentSessions agentId={agentId} />;
+  } else if (activeTab === 'schedules') {
+    content = <SchedulesPage agentId={agentId} />;
   } else if (activeTab === 'metrics') {
     content = <AgentMetrics agentId={agentId} />;
   } else if (snippetsFailed) {
@@ -133,7 +147,8 @@ export function AgentDetailsPage({ agentId }: AgentDetailsPageProps) {
       {sessionsServer != null && !detailFailed ? (
         <AgentDetailsTabs
           activeTab={activeTab}
-          showMetrics={metricsServer != null}
+          showMetrics={showMetrics}
+          showSchedules={showSchedules}
           onTabChange={tab =>
             updateShareSearch({
               agentId,

@@ -4,17 +4,18 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { useSessionShareSearch } from '../hooks/useSessionShareSearch.js';
 import { Icon } from '../icons/Icon.js';
+import { isSchedulesChromeEnabled, isSessionsChromeEnabled } from '../server/serverChrome.js';
 import { useOptionalAgentSessionsServer, useOptionalScheduleServer } from '../server/ServerContext.js';
 import { libraryAgentId, useShellMode } from '../server/ShellModeContext.js';
 import type { AgentLibraryEntry, AgentSpec, Schedule } from '../server/types.js';
 import { useSlot } from '../theme/SlotsProvider.js';
-import { writeScheduleShareSearch } from '../utils/scheduleShareUrl.js';
-import { writeSessionShareSearch } from '../utils/sessionShareUrl.js';
-import { auiButtonClass } from './lib/buttonClasses.js';
-import { cn } from './lib/cn.js';
+import { replaceScheduleShareSearch } from '../utils/scheduleShareUrl.js';
+import { AgentOverflowMenu } from './AgentOverflowMenu.js';
+import { EmptyScreen, EmptyScreenQueryHighlight } from './EmptyScreen.js';
 import { mountName } from './lib/mountName.js';
 import { useSearchAgentsList } from './lib/useSearchAgentsList.js';
-import { DropdownMenu, DropdownMenuItem } from './primitives/DropdownMenu.js';
+import { PageHeader } from './PageHeader.js';
+import { Button } from './primitives/Button.js';
 import SearchInput from './primitives/SearchInput.js';
 import { Skeleton } from './primitives/Skeleton.js';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './primitives/Table.js';
@@ -26,18 +27,20 @@ export type AgentsLibraryProps = {
 
 export type AgentScheduleSummary = {
   count: number;
-  hasPaused: boolean;
+  pausedCount: number;
 };
 
 export type AgentLibraryRowProps = {
   agent: AgentLibraryEntry;
-  showEdit: boolean;
+  canMutate: boolean;
+  canManageSchedules: boolean;
   scheduleSummary?: AgentScheduleSummary | null;
   onOpenSchedules?: () => void;
   onCreateSchedule?: () => void;
   onOpen?: () => void;
   onTry: () => void;
   onEdit: () => void;
+  onManageSchedules?: () => void;
 };
 
 /** Short label for model fqns like `provider/gpt-4.1` → `gpt-4.1`. */
@@ -48,20 +51,21 @@ function displayModelLabel(modelName: string): string {
 
 function AgentSchedulesEmptyState({ agentName, onOpen }: { agentName: string; onOpen?: () => void }) {
   return (
-    <button
-      type="button"
-      aria-label={`Add schedule for ${agentName}`}
-      className="text-text-secondary hover:text-primary-button-bg cursor-pointer text-sm font-medium"
-      onClick={onOpen}
-    >
-      <span aria-hidden className="md:group-hover:hidden">
+    <>
+      <span aria-hidden className="text-text-secondary text-sm md:group-hover:hidden">
         -
       </span>
-      <span aria-hidden className="hidden items-center gap-1 md:group-hover:inline-flex">
+      <Button.Ghost
+        type="button"
+        size="small"
+        aria-label={`Add schedule for ${agentName}`}
+        className="hidden md:group-hover:inline-flex"
+        onClick={onOpen}
+      >
         <Icon name="plus" className="size-3.5 shrink-0" />
         Schedule
-      </span>
-    </button>
+      </Button.Ghost>
+    </>
   );
 }
 
@@ -74,35 +78,47 @@ function AgentSchedulesBadge({
   agentName: string;
   onOpen?: () => void;
 }) {
-  const warning = summary.hasPaused;
+  const pausedCount = summary.pausedCount;
+  const activeCount = summary.count - pausedCount;
+  const ariaParts = [
+    ...(activeCount > 0 ? [`${activeCount} active`] : []),
+    ...(pausedCount > 0 ? [`${pausedCount} paused`] : []),
+  ];
   return (
     <button
       type="button"
-      aria-label={`${String(summary.count)} schedules for ${agentName}${warning ? ' (has paused)' : ''}`}
-      className={cn(
-        'inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium',
-        warning
-          ? 'border-amber-600/30 bg-amber-500/10 text-amber-800 dark:text-amber-300'
-          : 'border-border bg-secondary-bg text-text-secondary',
-      )}
+      aria-label={`${ariaParts.join(', ')} schedules for ${agentName}`}
+      className="inline-flex cursor-pointer items-center gap-1.5"
       onClick={onOpen}
     >
-      <Icon name="calendar-clock" className="size-3.5 shrink-0" />
-      <span>{summary.count}</span>
-      {warning ? <Icon name="triangle-exclamation" className="size-3.5 shrink-0" /> : null}
+      {activeCount > 0 ? (
+        <span className="inline-flex items-center gap-1 rounded-md border border-emerald-600/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:border-emerald-400/35 dark:bg-emerald-500/15 dark:text-emerald-300">
+          <Icon name="calendar-clock" className="size-3.5 shrink-0" />
+          <span>{activeCount} Active</span>
+        </span>
+      ) : null}
+      {pausedCount > 0 ? (
+        <span className="inline-flex items-center gap-1 rounded-md border border-amber-600/30 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-800 dark:border-amber-400/35 dark:bg-amber-500/15 dark:text-amber-300">
+          {activeCount === 0 ? <Icon name="calendar-clock" className="size-3.5 shrink-0" /> : null}
+          <span>{pausedCount} Paused</span>
+          <Icon name="triangle-exclamation" className="size-3.5 shrink-0" />
+        </span>
+      ) : null}
     </button>
   );
 }
 
 export function AgentLibraryRow({
   agent,
-  showEdit,
+  canMutate,
+  canManageSchedules,
   scheduleSummary,
   onOpenSchedules,
   onCreateSchedule,
   onOpen,
   onTry,
   onEdit,
+  onManageSchedules,
 }: AgentLibraryRowProps) {
   const spec = agent.agentSpec;
   const modelName = spec?.model.name;
@@ -112,59 +128,65 @@ export function AgentLibraryRow({
   const mcpNames = (spec?.mcpServers ?? [])
     .map(mountName)
     .filter((name: string | null): name is string => name != null);
-  const connectorsTitle = mcpNames.length ? `Connectors: ${mcpNames.join(', ')}` : `${mcpCount} connectors`;
-  const skillsTitle = skillNames.length ? `Skills: ${skillNames.join(', ')}` : `${skillsCount} skills`;
-
+  const modelLabel = modelName != null ? displayModelLabel(modelName) : null;
+  const modelTitle = modelName ?? '';
+  const connectorsTitle = mcpNames.length ? mcpNames.join(', ') : `${mcpCount} connectors`;
+  const skillsTitle = skillNames.length ? skillNames.join(', ') : `${skillsCount} skills`;
+  const hasConfiguration = modelLabel != null || skillsCount > 0 || mcpCount > 0;
   const hasNoSchedules = scheduleSummary != null && scheduleSummary.count === 0;
 
   return (
     <TableRow className={hasNoSchedules ? 'group' : undefined}>
       <TableCell className="text-text-primary font-medium">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="bg-primary-bg text-text-secondary inline-flex size-8 shrink-0 items-center justify-center rounded-md border border-border">
-            <Icon name="agent-2" className="size-4" />
-          </span>
-          <div className="min-w-0">
-            {onOpen == null ? (
-              <span className="block truncate">{agent.name}</span>
-            ) : (
-              <button
-                type="button"
-                className="hover:text-primary-button-bg block max-w-full cursor-pointer truncate text-left hover:underline"
-                aria-label={`Open ${agent.name}`}
-                onClick={onOpen}
-              >
-                {agent.name}
-              </button>
-            )}
-            {spec != null ? (
-              <div className="text-text-secondary mt-1 flex min-w-0 items-center gap-2">
-                {modelName ? (
-                  <span className="bg-primary-button-bg/10 text-primary-button-bg inline-flex max-w-[8rem] items-center gap-1 truncate rounded-full px-2 py-0.5 text-xs font-medium">
-                    <Icon name="cpu" className="size-3.5 shrink-0" />
-                    <span className="truncate">{displayModelLabel(modelName)}</span>
-                  </span>
-                ) : null}
-                {mcpCount > 0 ? (
-                  <Tooltip content={connectorsTitle}>
-                    <span className="inline-flex items-center gap-1 text-xs" aria-label={connectorsTitle}>
-                      <Icon name="plug" className="size-3.5" />
-                      {mcpCount}
-                    </span>
-                  </Tooltip>
-                ) : null}
-                {skillsCount > 0 ? (
-                  <Tooltip content={skillsTitle}>
-                    <span className="inline-flex items-center gap-1 text-xs" aria-label={skillsTitle}>
-                      <Icon name="lightbulb" className="size-3.5" />
-                      {skillsCount}
-                    </span>
-                  </Tooltip>
-                ) : null}
-              </div>
+        {onOpen == null ? (
+          <span className="block truncate">{agent.name}</span>
+        ) : (
+          <button
+            type="button"
+            className="block max-w-full cursor-pointer text-left"
+            aria-label={`Open ${agent.name}`}
+            onClick={onOpen}
+          >
+            <span className="block truncate">{agent.name}</span>
+          </button>
+        )}
+      </TableCell>
+      <TableCell>
+        {hasConfiguration ? (
+          <div className="text-text-secondary flex min-w-0 items-center gap-2">
+            {modelLabel != null ? (
+              <Tooltip content={modelTitle}>
+                <span
+                  className="bg-secondary-bg text-text-secondary inline-flex max-w-[10rem] items-center gap-1 truncate rounded-full px-2 py-0.5 text-xs font-medium"
+                  aria-label={modelTitle}
+                >
+                  <Icon name="cpu" className="size-3.5 shrink-0" />
+                  <span className="truncate">{modelLabel}</span>
+                </span>
+              </Tooltip>
+            ) : null}
+            {skillsCount > 0 ? (
+              <Tooltip content={skillsTitle}>
+                <span className="inline-flex items-center gap-1 text-xs" aria-label={`Skills: ${skillsTitle}`}>
+                  <Icon name="lightbulb" className="size-3.5 shrink-0" />
+                  {skillsCount}
+                </span>
+              </Tooltip>
+            ) : null}
+            {mcpCount > 0 ? (
+              <Tooltip content={connectorsTitle}>
+                <span className="inline-flex items-center gap-1 text-xs" aria-label={`Connectors: ${connectorsTitle}`}>
+                  <Icon name="plug" className="size-3.5 shrink-0" />
+                  {mcpCount}
+                </span>
+              </Tooltip>
             ) : null}
           </div>
-        </div>
+        ) : (
+          <span className="text-text-secondary text-sm" aria-label={`Configuration unavailable for ${agent.name}`}>
+            —
+          </span>
+        )}
       </TableCell>
       {scheduleSummary !== undefined ? (
         <TableCell>
@@ -181,37 +203,18 @@ export function AgentLibraryRow({
       ) : null}
       <TableCell className="w-px">
         <div className="flex items-center justify-end gap-1.5">
-          <button
-            type="button"
-            aria-label={`Try agent ${agent.name}`}
-            className={auiButtonClass({
-              variant: 'outline',
-              size: 'sm',
-            })}
-            onClick={onTry}
-          >
+          <Button.Secondary type="button" aria-label={`Try agent ${agent.name}`} size="large" onClick={onTry}>
             <Icon name="play" className="size-3.5" />
             Try
-          </button>
-          {showEdit ? (
-            <DropdownMenu
-              align="end"
-              trigger={
-                <button
-                  type="button"
-                  className={auiButtonClass({ variant: 'ghost', size: 'icon' })}
-                  aria-label={`Actions for ${agent.name}`}
-                >
-                  <Icon name="ellipsis" className="size-4" />
-                </button>
-              }
-            >
-              <DropdownMenuItem onClick={onEdit}>
-                <Icon name="pencil" className="size-3.5" />
-                Edit
-              </DropdownMenuItem>
-            </DropdownMenu>
-          ) : null}
+          </Button.Secondary>
+          <AgentOverflowMenu
+            agentName={agent.name}
+            {...(spec != null ? { agentSpec: spec } : {})}
+            canMutate={canMutate}
+            canManageSchedules={canManageSchedules}
+            onEdit={onEdit}
+            {...(onManageSchedules != null ? { onManageSchedules } : {})}
+          />
         </div>
       </TableCell>
     </TableRow>
@@ -222,10 +225,10 @@ function summarizeSchedulesByAgent(schedules: readonly Schedule[]): Map<string, 
   const map = new Map<string, AgentScheduleSummary>();
   for (const schedule of schedules) {
     const id = schedule.agentId;
-    const prev = map.get(id) ?? { count: 0, hasPaused: false };
+    const prev = map.get(id) ?? { count: 0, pausedCount: 0 };
     const next = {
       count: prev.count + 1,
-      hasPaused: prev.hasPaused || schedule.status === 'paused',
+      pausedCount: prev.pausedCount + (schedule.status === 'paused' ? 1 : 0),
     };
     map.set(id, next);
     if (schedule.agentName != null && schedule.agentName !== '' && schedule.agentName !== id) {
@@ -267,9 +270,11 @@ export function AgentsLibrary({ onSelectAgent }: AgentsLibraryProps) {
   const [scheduleByAgent, setScheduleByAgent] = useState<Map<string, AgentScheduleSummary> | null>(null);
   const open = shell.libraryOpen;
 
-  const canEdit = shell.isComposerEnabled === true;
+  const canMutate = shell.isComposerEnabled === true;
   const agentsListEpoch = shell.agentsListEpoch;
-  const showSchedulesColumn = scheduleServer != null;
+  const showSchedulesColumn = isSchedulesChromeEnabled({ schedules: scheduleServer });
+  const canOpenAgentDetails = isSessionsChromeEnabled({ sessions: sessionsServer });
+  const canOpenAgentSchedules = showSchedulesColumn && canOpenAgentDetails;
 
   useEffect(() => {
     if (!open) setQuery('');
@@ -319,23 +324,20 @@ export function AgentsLibrary({ onSelectAgent }: AgentsLibraryProps) {
   }, [agents, open, scheduleServer, agentsListEpoch]);
 
   const openSchedulesForAgent = ({ agentId, isNew }: { agentId: string; isNew?: boolean }) => {
-    const url = new URL(window.location.href);
-    writeSessionShareSearch(url.searchParams, {
-      sessionId: null,
-      agentId: null,
-      tab: null,
-      view: null,
-      timeRange: null,
-    });
-    writeScheduleShareSearch(url.searchParams, {
-      agent: agentId,
+    replaceScheduleShareSearch({
+      agent: null,
       status: null,
       q: null,
       isNew: isNew === true ? true : null,
     });
-    window.history.replaceState(window.history.state, '', url);
-    shell.setLibraryOpen(false);
-    shell.setSchedulesOpen(true);
+    updateShareSearch({
+      agentId,
+      tab: 'schedules',
+      sessionId: null,
+      view: null,
+      timeRange: null,
+    });
+    shell.openLibraryAgent(agentId);
   };
 
   const handleTry = (agent: AgentLibraryEntry) => {
@@ -364,20 +366,19 @@ export function AgentsLibrary({ onSelectAgent }: AgentsLibraryProps) {
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-primary-bg">
-      <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2.5 md:px-6">
-        <div className="flex min-w-0 items-center gap-2">
-          <Icon name="library-big" className="text-text-primary size-4" />
-          <h1 className="text-text-primary truncate text-md font-semibold">Agents</h1>
-        </div>
-        <div className="ml-auto w-56 shrink-0">
-          <SearchInput query={query} setQuery={setQuery} placeholder="Search agents" />
-          {isSearching ? (
-            <p className="sr-only" role="status">
-              Searching…
-            </p>
-          ) : null}
-        </div>
-      </header>
+      <PageHeader
+        title="Agents"
+        end={
+          <div className="w-56 shrink-0">
+            <SearchInput query={query} setQuery={setQuery} placeholder="Search agents" />
+            {isSearching ? (
+              <p className="sr-only" role="status">
+                Searching…
+              </p>
+            ) : null}
+          </div>
+        }
+      />
 
       <div className="bg-secondary-bg/40 flex min-h-0 flex-1 flex-col">
         <div ref={listRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4" aria-label="Agents">
@@ -390,11 +391,18 @@ export function AgentsLibrary({ onSelectAgent }: AgentsLibraryProps) {
           ) : error ? (
             <p className="text-failure-bg px-3 py-8 text-center text-sm">{error}</p>
           ) : agents.length === 0 ? (
-            <p className="text-text-secondary px-3 py-8 text-center text-sm">
-              {query.trim()
-                ? `No agents match "${query.trim()}".`
-                : 'No agents yet. Build one in a chat, then save it as an agent.'}
-            </p>
+            <EmptyScreen
+              title="No Agents Found"
+              description={
+                query.trim() ? (
+                  <>
+                    No search results found for <EmptyScreenQueryHighlight>{query.trim()}</EmptyScreenQueryHighlight>
+                  </>
+                ) : (
+                  'Build one in a chat, then save it as an agent.'
+                )
+              }
+            />
           ) : (
             <>
               <div className="overflow-hidden rounded-lg border border-border">
@@ -402,7 +410,8 @@ export function AgentsLibrary({ onSelectAgent }: AgentsLibraryProps) {
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
                       <TableHead>Agent name</TableHead>
-                      {showSchedulesColumn ? <TableHead className="w-[8rem]">Schedules</TableHead> : null}
+                      <TableHead>Configuration</TableHead>
+                      {showSchedulesColumn ? <TableHead className="w-[14rem]">Schedules</TableHead> : null}
                       <TableHead className="w-px">
                         <span className="sr-only">Actions</span>
                       </TableHead>
@@ -413,25 +422,26 @@ export function AgentsLibrary({ onSelectAgent }: AgentsLibraryProps) {
                       const agentSpec = agent.agentSpec;
                       const agentId = agent.agentId;
                       const id = libraryAgentId(agent);
-                      const showEdit = canEdit && agentSpec != null;
                       const summary = showSchedulesColumn
                         ? (scheduleByAgent?.get(id) ??
                           scheduleByAgent?.get(agent.name) ??
-                          (scheduleByAgent == null ? null : { count: 0, hasPaused: false }))
+                          (scheduleByAgent == null ? null : { count: 0, pausedCount: 0 }))
                         : undefined;
                       return (
                         <SlottedAgentLibraryRow
                           key={id}
                           agent={agent}
-                          showEdit={showEdit}
+                          canMutate={canMutate}
+                          canManageSchedules={canOpenAgentSchedules}
                           {...(summary !== undefined ? { scheduleSummary: summary } : {})}
-                          {...(showSchedulesColumn
+                          {...(canOpenAgentSchedules && agentId != null
                             ? {
-                                onOpenSchedules: () => openSchedulesForAgent({ agentId: id }),
-                                onCreateSchedule: () => openSchedulesForAgent({ agentId: id, isNew: true }),
+                                onOpenSchedules: () => openSchedulesForAgent({ agentId }),
+                                onCreateSchedule: () => openSchedulesForAgent({ agentId, isNew: true }),
+                                onManageSchedules: () => openSchedulesForAgent({ agentId }),
                               }
                             : {})}
-                          {...(sessionsServer != null && agentId != null
+                          {...(canOpenAgentDetails && agentId != null
                             ? {
                                 onOpen: () => {
                                   updateShareSearch({

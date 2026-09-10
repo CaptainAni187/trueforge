@@ -14,6 +14,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import winston from 'winston';
 import { buildOpenApiDocument, createServerApp } from '../src/app';
+import { TrueForgeAuthorizer } from '../src/auth/authorizer';
 import { StandaloneAuthenticator } from '../src/auth/standaloneAuthenticator';
 import { McpCatalog } from '../src/catalog/McpCatalog';
 import { ModelCatalog } from '../src/catalog/ModelCatalog';
@@ -61,6 +62,7 @@ const sessionStore = new InMemorySessionStore();
 const db = createSqliteDb(':memory:');
 const tokenStore = new SqliteOAuthTokenStore(db);
 const agentStore = new SqliteAgentStore(db);
+const skillStore = new SqliteSkillStore(db);
 const app = createServerApp({
   modelCatalog: ModelCatalog.load(),
   resolveModelProviderStore: () => new SqliteModelProviderStore(db),
@@ -74,9 +76,9 @@ const app = createServerApp({
     }),
   tokenStore,
   skillCatalog: SkillCatalog.load(),
-  skillStore: new SqliteSkillStore(db),
+  resolveSkillStore: () => skillStore,
   sandboxCatalog: SandboxCatalog.load(),
-  sandboxProviderStore: new SqliteSandboxProviderStore(db),
+  resolveSandboxProviderStore: () => new SqliteSandboxProviderStore(db),
   resolveAgentStore: () => agentStore,
   scheduleStore: new SqliteScheduleStore(db),
   sessionStore,
@@ -88,6 +90,7 @@ const app = createServerApp({
   logger: winston.createLogger({ silent: true }),
   oidcClient: undefined,
   authenticator: new StandaloneAuthenticator(),
+  authorizer: new TrueForgeAuthorizer(),
 });
 
 // Runtime apps only advertise BearerAuth when OIDC is configured. The committed

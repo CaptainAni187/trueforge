@@ -63,6 +63,7 @@ export interface ScheduleRunRecord {
   status: ScheduleRunStatus;
   created_by_subject: CreatedBySubject;
   triggered_at: string | null;
+  reason: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -94,18 +95,32 @@ export interface ListSchedulesInput {
   page_token: string | undefined;
   /** When set, only schedules for these agent names */
   agent_names: readonly string[] | undefined;
-  created_by_subject_id?: string | undefined;
+  /** When set, match creator or agent binding. Empty `agent_ids` means creator-only. */
+  created_by_or_agent_ids:
+    | {
+        created_by_subject_id: string;
+        agent_ids: readonly string[];
+      }
+    | undefined;
 }
 
 /** User-facing run listing, scoped to one schedule. */
 export interface ListRunsInput {
   tenant_id: string;
   schedule_id: string;
+  limit: number;
+  page_token: string | undefined;
 }
 
 export interface GetScheduleInput {
   tenant_id: string;
   id: string;
+}
+
+export interface GetOwnedIdsInput {
+  tenant_id: string;
+  ids: readonly string[];
+  subject_id: string;
 }
 
 export interface CreateScheduleInput {
@@ -144,6 +159,7 @@ export interface CreateScheduleRunInput {
   created_by_subject: CreatedBySubject;
   status: ScheduleRunStatus;
   triggered_at?: Date | null;
+  reason?: string | null;
 }
 
 export interface ListScheduledRunsInput {
@@ -166,6 +182,7 @@ export interface UpdateScheduleRunStatusInput {
   tenant_id: string;
   id: string;
   status: ScheduleRunStatus;
+  reason?: string | null;
 }
 
 export class ScheduleRunConflictError extends Error {
@@ -236,6 +253,8 @@ export interface IScheduleStore<TTransaction = never> {
     input: ListSchedulesInput,
     transaction?: TTransaction,
   ): Promise<{ data: ScheduleRecord[]; pagination: TokenPagination }>;
+  /** Ids among `ids` owned by `subject_id`. Empty `ids` → `[]`. */
+  getOwnedIds(input: GetOwnedIdsInput, transaction?: TTransaction): Promise<readonly string[]>;
 
   // --- schedule_run ---
   /** One run by immutable id. */
@@ -263,5 +282,8 @@ export interface IScheduleStore<TTransaction = never> {
   /**
    * Runs of one schedule (any status), newest `scheduled_for` first.
    */
-  listRuns(input: ListRunsInput, transaction?: TTransaction): Promise<ScheduleRunRecord[]>;
+  listRuns(
+    input: ListRunsInput,
+    transaction?: TTransaction,
+  ): Promise<{ data: ScheduleRunRecord[]; pagination: TokenPagination }>;
 }

@@ -1,13 +1,19 @@
 'use client';
 
 import { Icon } from '../../icons/Icon.js';
+import { useOptionalServer } from '../../server/ServerContext.js';
 import { useShellMode } from '../../server/ShellModeContext.js';
+import { AgentOverflowMenu } from '../AgentOverflowMenu.js';
 import { auiButtonClass } from '../lib/buttonClasses.js';
+import { cn } from '../lib/cn.js';
+import { PageHeader, pageHeaderTitleClassName } from '../PageHeader.js';
+import { Button } from '../primitives/Button.js';
 import type { AgentDetailsHeaderProps } from './types.js';
 
 export function AgentDetailsHeader({ agentId, detail, onBack }: AgentDetailsHeaderProps) {
   const shell = useShellMode();
-  const canEdit = shell.isComposerEnabled && detail != null;
+  const builder = useOptionalServer();
+  const canMutate = shell.isComposerEnabled && detail != null && builder != null;
 
   const handleTry = () => {
     if (detail == null) return;
@@ -30,8 +36,9 @@ export function AgentDetailsHeader({ agentId, detail, onBack }: AgentDetailsHead
   };
 
   return (
-    <header className="shrink-0 border-b border-border bg-primary-bg">
-      <div className="flex min-w-0 flex-wrap items-center gap-2 px-3 py-2">
+    <PageHeader
+      className="bg-primary-bg"
+      start={
         <button
           type="button"
           aria-label="Back to Agents"
@@ -41,41 +48,41 @@ export function AgentDetailsHeader({ agentId, detail, onBack }: AgentDetailsHead
         >
           <Icon name="arrow-left" />
         </button>
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-1 text-xs text-text-secondary">
-            <button type="button" className="cursor-pointer truncate hover:text-text-primary" onClick={onBack}>
-              Agents
-            </button>
-            <Icon name="chevron-right" className="size-3 shrink-0" />
-            <span className="truncate">{detail?.name ?? agentId}</span>
-          </div>
-          <h1 className="truncate text-lg font-semibold tracking-tight text-text-primary">{detail?.name ?? agentId}</h1>
+      }
+      title={
+        <div className={cn('flex min-w-0 items-center gap-1', pageHeaderTitleClassName)}>
+          <button type="button" className="cursor-pointer truncate hover:text-text-primary" onClick={onBack}>
+            Agents
+          </button>
+          <Icon name="chevron-right" className="size-3 shrink-0" />
+          <span className="truncate">{detail?.name ?? agentId}</span>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <button
+      }
+      end={
+        <>
+          <Button.Primary
             type="button"
             aria-label="Try agent"
+            size="large"
             disabled={detail == null}
-            className={auiButtonClass({ variant: 'default', size: 'sm' })}
             onClick={handleTry}
           >
             <Icon name="play" className="size-3.5" />
             Try
-          </button>
-          {canEdit ? (
-            <button
-              type="button"
-              aria-label="Edit agent"
-              className={auiButtonClass({ variant: 'outline', size: 'sm' })}
-              onClick={handleEdit}
-            >
-              <Icon name="pencil" className="size-3.5" />
-              Edit
-            </button>
+          </Button.Primary>
+          {detail != null ? (
+            <AgentOverflowMenu
+              agentName={detail.name}
+              agentSpec={detail.agentSpec}
+              canMutate={canMutate}
+              canManageSchedules={false}
+              onEdit={handleEdit}
+              onDeleted={onBack}
+            />
           ) : null}
-        </div>
-      </div>
-    </header>
+        </>
+      }
+    />
   );
 }
 

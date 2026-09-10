@@ -22,6 +22,7 @@ import {
   isFileContentPart,
   McpConnectionError,
   rawSandboxId,
+  redisKey,
   SandboxError,
   VercelAILLM,
 } from '@truefoundry/trueforge-core/core';
@@ -29,9 +30,10 @@ import type { Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { streamSSE } from 'hono/streaming';
 import type { Logger } from 'winston';
+import type { Authorizer } from '../auth/authorizer';
 import type { ResolveRequestContext } from '../auth/identity';
 import configuration from '../config';
-import type { IAgentStore } from '../db/agentStore';
+import type { AgentRecord, IAgentStore } from '../db/agentStore';
 import type { IMcpServerWithAuthStore } from '../db/mcpServerStore';
 import type { IModelProviderStore } from '../db/modelProviderStore';
 import type { ISandboxProviderStore } from '../db/sandboxProviderStore';
@@ -52,10 +54,10 @@ import {
   buildTurnSandbox,
   getMcpConnection,
   getModelDetails,
-  resolveGitSkills,
   resolveSandboxProvider,
 } from '../runtime/sessionResources';
 import { checkSnapshotStatus } from '../sandbox/providerUtils';
+import { canReadAgentBoundResource } from './agentAccess';
 
 export function toWireTurn(record: TurnRecordWithoutSnapshot): Turn {
   return {
@@ -103,29 +105,29 @@ export interface TurnsRouterDeps {
   sessions: Sessions;
   sessionStore: ISessionStore;
   activeTurns: ActiveTurnRegistry;
-  resolveModelProviderStore: (c: Context) => IModelProviderStore;
-  resolveMcpServerStore: (c: Context) => IMcpServerWithAuthStore;
-  skillStore: ISkillStore;
+  resolveModelProviderStore: (c: Context, runAsAgent?: AgentRecord) => IModelProviderStore;
+  resolveMcpServerStore: (c: Context, runAsAgent?: AgentRecord) => IMcpServerWithAuthStore;
+  resolveSkillStore: (c: Context) => ISkillStore;
   resolveAgentStore: (c: Context) => IAgentStore;
   /** Resumable live turn-event transport: create-turn writes, subscribe polls. */
   eventSubscriptions: EventSubscriptionRegistry<TurnStreamingEvent>;
-  sandboxProviderStore: ISandboxProviderStore;
+  resolveSandboxProviderStore: (c: Context) => ISandboxProviderStore;
   logger: Logger;
   resolveRequestContext: ResolveRequestContext;
+  authorizer: Authorizer;
 }
 
 /**
- * Deps needed to create a turn and drain events in-process (no HTTP). Unlike the HTTP path, this
- * carries already-resolved `modelProviderStore` / `mcpServerStore` / `agentStore` (the scheduler has no request
- * context to resolve them).
+ * Deps needed to create a turn and drain events in-process (no HTTP). Carries already-resolved
+ * stores; callers must resolve them from the request context (e.g. schedule `resolveTurnDeps(c, agent)`)
+ * so TrueFoundry mode stays token-bound for models, MCP, and skills.
  */
-export type BeginTurnExecutionDeps = Pick<
-  TurnsRouterDeps,
-  'activeTurns' | 'eventSubscriptions' | 'skillStore' | 'sandboxProviderStore' | 'logger'
-> & {
+export type BeginTurnExecutionDeps = Pick<TurnsRouterDeps, 'activeTurns' | 'eventSubscriptions' | 'logger'> & {
+  skillStore: ISkillStore;
   modelProviderStore: IModelProviderStore;
   mcpServerStore: IMcpServerWithAuthStore;
   agentStore: IAgentStore;
+  sandboxProviderStore: ISandboxProviderStore;
 };
 
 /**
@@ -219,15 +221,18 @@ function createTurnResolver(deps: {
           });
         }
       }
-      const gitSkills = await resolveGitSkills({
-        tenant_id,
-        skills: spec.skills ?? [],
-        store: skillStore,
-      });
+      const skills = spec.skills ?? [];
+      const mountSkills =
+        skills.length === 0
+          ? []
+          : await skillStore.resolveTurnSkills({
+              tenant_id,
+              skills,
+            });
       return buildTurnSandbox({
         provider,
         logger,
-        gitSkills,
+        skills: mountSkills,
         fileDownloadEnabled: spec.config.sandbox.file_downloads,
         existingSandboxId: carriedSandboxId,
         tracing,
@@ -300,7 +305,7 @@ export function streamTTLSecondsFor(event: TurnStreamingEvent): number | undefin
 
 /** Redis/in-memory key for one turn's resumable event stream. */
 export function turnStreamId(tenantId: string, sessionId: string, turnId: string): string {
-  return `agent:turn:${tenantId}:${sessionId}:${turnId}:stream`;
+  return redisKey('agent', 'turn', tenantId, sessionId, turnId, 'stream');
 }
 
 /**
@@ -510,7 +515,7 @@ export function resolveAfterSequenceNumber(c: Context, bodyAfterSequenceNumber?:
 }
 
 /** True when the subject is the session creator (`created_by_subject.subject_id`). */
-function checkTurnAccess({
+function isSessionOwner({
   subject_id,
   created_by_subject,
 }: {
@@ -537,10 +542,13 @@ export function createTurnsRouter(deps: TurnsRouterDeps) {
       return c.json({ error: { message: `Session not found: ${sessionId}` } }, 404);
     }
     if (
-      !checkTurnAccess({
-        subject_id: requestContext.subject.id,
-        created_by_subject: session.record.created_by_subject,
-      })
+      !(await canReadAgentBoundResource({
+        store: deps.resolveAgentStore(c),
+        context: requestContext,
+        authorizer: deps.authorizer,
+        agent_id: session.record.agent.type === 'reference' ? session.record.agent.id : undefined,
+        created_by_subject_id: session.record.created_by_subject.subject_id,
+      }))
     ) {
       return c.json({ error: { message: FORBIDDEN_SESSION_ACCESS } }, 403);
     }
@@ -569,10 +577,13 @@ export function createTurnsRouter(deps: TurnsRouterDeps) {
       return c.json({ error: { message: `Session not found: ${sessionId}` } }, 404);
     }
     if (
-      !checkTurnAccess({
-        subject_id: requestContext.subject.id,
-        created_by_subject: session.record.created_by_subject,
-      })
+      !(await canReadAgentBoundResource({
+        store: deps.resolveAgentStore(c),
+        context: requestContext,
+        authorizer: deps.authorizer,
+        agent_id: session.record.agent.type === 'reference' ? session.record.agent.id : undefined,
+        created_by_subject_id: session.record.created_by_subject.subject_id,
+      }))
     ) {
       return c.json({ error: { message: FORBIDDEN_SESSION_ACCESS } }, 403);
     }
@@ -601,7 +612,7 @@ export function createTurnsRouter(deps: TurnsRouterDeps) {
         return c.json({ error: { message: `Session not found: ${sessionId}` } }, 404);
       }
       if (
-        !checkTurnAccess({
+        !isSessionOwner({
           subject_id: requestContext.subject.id,
           created_by_subject: session.record.created_by_subject,
         })
@@ -622,7 +633,7 @@ export function createTurnsRouter(deps: TurnsRouterDeps) {
 
       const provider = await resolveSandboxProvider({
         tenant_id: requestContext.tenant_id,
-        store: deps.sandboxProviderStore,
+        store: deps.resolveSandboxProviderStore(c),
         logger: deps.logger,
         sessionId,
       });
@@ -666,10 +677,13 @@ export function createTurnsRouter(deps: TurnsRouterDeps) {
       return c.json({ error: { message: `Session not found: ${sessionId}` } }, 404);
     }
     if (
-      !checkTurnAccess({
-        subject_id: requestContext.subject.id,
-        created_by_subject: session.record.created_by_subject,
-      })
+      !(await canReadAgentBoundResource({
+        store: deps.resolveAgentStore(c),
+        context: requestContext,
+        authorizer: deps.authorizer,
+        agent_id: session.record.agent.type === 'reference' ? session.record.agent.id : undefined,
+        created_by_subject_id: session.record.created_by_subject.subject_id,
+      }))
     ) {
       return c.json({ error: { message: FORBIDDEN_SESSION_ACCESS } }, 403);
     }
@@ -705,12 +719,33 @@ export function createTurnsRouter(deps: TurnsRouterDeps) {
       return c.json({ error: { message: `Session not found: ${sessionId}` } }, 404);
     }
     if (
-      !checkTurnAccess({
+      !isSessionOwner({
         subject_id: requestContext.subject.id,
         created_by_subject: session.record.created_by_subject,
       })
     ) {
       return c.json({ error: { message: FORBIDDEN_CREATE_TURN } }, 403);
+    }
+
+    let referencedAgent: AgentRecord | undefined;
+    if (session.record.agent.type === 'reference') {
+      const agentId = session.record.agent.id;
+      const agent = await deps.resolveAgentStore(c).getAgent({
+        tenant_id: requestContext.tenant_id,
+        id: agentId,
+      });
+      if (agent === undefined) {
+        return c.json({ error: { message: `Agent not found: ${agentId}` } }, 422);
+      }
+      const canUseAgent = await deps.authorizer.canAccessAgent({
+        context: requestContext,
+        action: 'use',
+        agent,
+      });
+      if (!canUseAgent) {
+        return c.json({ error: { message: `Agent not found: ${agentId}` } }, 404);
+      }
+      referencedAgent = agent;
     }
 
     const turnParams = {
@@ -720,9 +755,11 @@ export function createTurnsRouter(deps: TurnsRouterDeps) {
       userRef: requestContext.subject.id,
       deps: {
         ...deps,
-        modelProviderStore: deps.resolveModelProviderStore(c),
-        mcpServerStore: deps.resolveMcpServerStore(c),
+        modelProviderStore: deps.resolveModelProviderStore(c, referencedAgent),
+        mcpServerStore: deps.resolveMcpServerStore(c, referencedAgent),
+        skillStore: deps.resolveSkillStore(c),
         agentStore: deps.resolveAgentStore(c),
+        sandboxProviderStore: deps.resolveSandboxProviderStore(c),
       },
     };
 
@@ -778,10 +815,13 @@ export function createTurnsRouter(deps: TurnsRouterDeps) {
       return c.json({ error: { message: `Session not found: ${sessionId}` } }, 404);
     }
     if (
-      !checkTurnAccess({
-        subject_id: requestContext.subject.id,
-        created_by_subject: session.record.created_by_subject,
-      })
+      !(await canReadAgentBoundResource({
+        store: deps.resolveAgentStore(c),
+        context: requestContext,
+        authorizer: deps.authorizer,
+        agent_id: session.record.agent.type === 'reference' ? session.record.agent.id : undefined,
+        created_by_subject_id: session.record.created_by_subject.subject_id,
+      }))
     ) {
       return c.json({ error: { message: FORBIDDEN_SESSION_ACCESS } }, 403);
     }

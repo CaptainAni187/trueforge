@@ -1,4 +1,71 @@
 # Reference
+## Internal
+<details><summary><code>client.internal.<a href="/src/api/resources/internal/client/Client.ts">listPermissions</a>({ ...params }) -> TrueForge.ListPermissionsResponse</code></summary>
+<dl>
+<dd>
+
+#### 📝 Description
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+Return granted actions for each requested agent, schedule, or session id.
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### 🔌 Usage
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+```typescript
+await client.internal.listPermissions({
+    resourceIds: ["resource_ids"],
+    resourceType: "agent"
+});
+
+```
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### ⚙️ Parameters
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+**request:** `TrueForge.ListPermissionsRequest` 
+    
+</dd>
+</dl>
+
+<dl>
+<dd>
+
+**requestOptions:** `InternalClient.RequestOptions` 
+    
+</dd>
+</dl>
+</dd>
+</dl>
+
+
+</dd>
+</dl>
+</details>
+
 ## Agents
 <details><summary><code>client.agents.<a href="/src/api/resources/agents/client/Client.ts">list</a>() -> TrueForge.ListAgentsResponse</code></summary>
 <dl>
@@ -277,7 +344,7 @@ await client.agents.update("agent_id", {
 <dl>
 <dd>
 
-Delete a configured agent by immutable id. Idempotent if already gone.
+Delete a configured agent by immutable id.
 </dd>
 </dl>
 </dd>
@@ -441,7 +508,7 @@ await client.server.getCapabilities();
 </details>
 
 ## MCP Servers
-<details><summary><code>client.mcpServers.<a href="/src/api/resources/mcpServers/client/Client.ts">list</a>({ ...params }) -> core.Page&lt;TrueForge.AvailableMcpServer, TrueForge.ListAvailableMcpServersResponse&gt;</code></summary>
+<details><summary><code>client.mcpServers.<a href="/src/api/resources/mcpServers/client/Client.ts">list</a>() -> TrueForge.ListAvailableMcpServersResponse</code></summary>
 <dl>
 <dd>
 
@@ -453,7 +520,7 @@ await client.server.getCapabilities();
 <dl>
 <dd>
 
-Paginated MCP servers as a slim name/url list for the composer.
+Configured MCP servers as a slim name/url list for the composer.
 </dd>
 </dl>
 </dd>
@@ -484,7 +551,62 @@ await client.mcpServers.list();
 <dl>
 <dd>
 
-**request:** `TrueForge.ListMcpServersRequest` 
+**requestOptions:** `McpServersClient.RequestOptions` 
+    
+</dd>
+</dl>
+</dd>
+</dl>
+
+
+</dd>
+</dl>
+</details>
+
+<details><summary><code>client.mcpServers.<a href="/src/api/resources/mcpServers/client/Client.ts">get</a>(name) -> TrueForge.GetAvailableMcpServerResponse</code></summary>
+<dl>
+<dd>
+
+#### 📝 Description
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+A single MCP server as the slim chat projection, with live per-user auth_status.
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### 🔌 Usage
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+```typescript
+await client.mcpServers.get("name");
+
+```
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### ⚙️ Parameters
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+**name:** `string` — MCP server name.
     
 </dd>
 </dl>
@@ -770,7 +892,7 @@ await client.models.list();
 <dl>
 <dd>
 
-List schedules for the tenant, newest first. Optionally filter by `agent_names`.
+List schedules for the tenant, newest first.
 </dd>
 </dl>
 </dd>
@@ -1159,7 +1281,7 @@ await client.schedules.delete("schedule_id");
 </dl>
 </details>
 
-<details><summary><code>client.schedules.<a href="/src/api/resources/schedules/client/Client.ts">listRuns</a>(schedule_id) -> TrueForge.ListScheduleRunsResponse</code></summary>
+<details><summary><code>client.schedules.<a href="/src/api/resources/schedules/client/Client.ts">listRuns</a>(schedule_id, { ...params }) -> core.Page&lt;TrueForge.ScheduleRun, TrueForge.ListScheduleRunsResponse&gt;</code></summary>
 <dl>
 <dd>
 
@@ -1171,7 +1293,7 @@ await client.schedules.delete("schedule_id");
 <dl>
 <dd>
 
-List runs of a schedule, newest `scheduled_for` first. Only the schedule creator (or an admin) may list its runs.
+List runs of a schedule, newest `scheduled_for` first. Available to its creator or a manager of its agent.
 </dd>
 </dl>
 </dd>
@@ -1210,6 +1332,14 @@ await client.schedules.listRuns("schedule_id");
 <dl>
 <dd>
 
+**request:** `TrueForge.ListRunsSchedulesRequest` 
+    
+</dd>
+</dl>
+
+<dl>
+<dd>
+
 **requestOptions:** `SchedulesClient.RequestOptions` 
     
 </dd>
@@ -1235,7 +1365,7 @@ await client.schedules.listRuns("schedule_id");
 <dl>
 <dd>
 
-List the caller's sessions (newest first by default), token-paginated. Results are scoped to the authenticated identity via the session store's `created_by_subject.subject_id` filter (not a client query param). Optional `agent_id` filters to sessions bound to that named agent. Pass `page_token` to fetch the next page, keeping the other query params constant.
+List the sessions (newest first by default).
 </dd>
 </dl>
 </dd>
@@ -2285,6 +2415,71 @@ await client.skills.list();
 </dl>
 </details>
 
+<details><summary><code>client.skills.<a href="/src/api/resources/skills/client/Client.ts">listVersions</a>({ ...params }) -> TrueForge.ListSkillVersionsResponse</code></summary>
+<dl>
+<dd>
+
+#### 📝 Description
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+Versions for one skill.
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### 🔌 Usage
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+```typescript
+await client.skills.listVersions({
+    name: "name"
+});
+
+```
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### ⚙️ Parameters
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+**request:** `TrueForge.ListVersionsSkillsRequest` 
+    
+</dd>
+</dl>
+
+<dl>
+<dd>
+
+**requestOptions:** `SkillsClient.RequestOptions` 
+    
+</dd>
+</dl>
+</dd>
+</dl>
+
+
+</dd>
+</dl>
+</details>
+
 ## Catalogs McpServers
 <details><summary><code>client.catalogs.mcpServers.<a href="/src/api/resources/catalogs/resources/mcpServers/client/Client.ts">list</a>() -> TrueForge.GetMcpServerCatalogResponse</code></summary>
 <dl>
@@ -2834,7 +3029,7 @@ await client.internal.agents.getCodeSnippets("agent_id");
 </details>
 
 ## Settings McpServers
-<details><summary><code>client.settings.mcpServers.<a href="/src/api/resources/settings/resources/mcpServers/client/Client.ts">list</a>({ ...params }) -> core.Page&lt;TrueForge.ConfiguredMcpServer, TrueForge.ListMcpServersResponse&gt;</code></summary>
+<details><summary><code>client.settings.mcpServers.<a href="/src/api/resources/settings/resources/mcpServers/client/Client.ts">list</a>() -> TrueForge.ListMcpServersResponse</code></summary>
 <dl>
 <dd>
 
@@ -2846,7 +3041,7 @@ await client.internal.agents.getCodeSnippets("agent_id");
 <dl>
 <dd>
 
-Paginated MCP servers with auth_status. Header secrets are redacted.
+Configured MCP servers with auth_status. Header secrets are redacted.
 </dd>
 </dl>
 </dd>
@@ -2873,14 +3068,6 @@ await client.settings.mcpServers.list();
 
 <dl>
 <dd>
-
-<dl>
-<dd>
-
-**request:** `TrueForge.settings.ListMcpServersRequest` 
-    
-</dd>
-</dl>
 
 <dl>
 <dd>

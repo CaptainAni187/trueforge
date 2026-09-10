@@ -4,6 +4,10 @@ import { cloneElement, isValidElement, useEffect, useLayoutEffect, type ReactNod
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SaveAgentButton } from '@/atoms/SaveAgentButton.js';
+import {
+  AgentConfigInstructionsProvider,
+  useAgentConfigInstructions,
+} from '@/atoms/draft/AgentConfigInstructionsContext.js';
 import { ServerProvider } from '@/server/ServerContext.js';
 import { ShellModeProvider, useShellMode, type AgentConfig } from '@/server/ShellModeContext.js';
 import type { AgentSpec, AgentUIServer, SaveAgentRequest, SaveAgentResult } from '@/server/types.js';
@@ -13,11 +17,13 @@ import { createMockAgentUIServer } from '../server/mockServer.js';
 let agentSpec: AgentSpec;
 const flushAgentSpec = vi.fn(async () => undefined);
 const adoptAgentSpec = vi.fn();
+const updateAgentSpec = vi.fn();
 
 vi.mock('@truefoundry/assistant-ui-runtime', () => ({
   useTrueFoundryAgentSpec: () => ({ agentSpec, draftSessionId: 'draft-1' }),
   useTrueFoundryFlushAgentSpec: () => flushAgentSpec,
   useTrueFoundryAdoptAgentSpec: () => adoptAgentSpec,
+  useTrueFoundryUpdateAgentSpec: () => updateAgentSpec,
 }));
 
 beforeAll(() => {
@@ -110,6 +116,18 @@ function BoundMutableSaveButton({ agentId, agentName }: { agentId: string; agent
   return <SaveAgentButton />;
 }
 
+function SaveWithInstructionDraft() {
+  const { onChange } = useAgentConfigInstructions();
+  return (
+    <>
+      <button type="button" onClick={() => onChange('Instructions currently visible in the drawer.')}>
+        Edit instructions
+      </button>
+      <SaveAgentButton />
+    </>
+  );
+}
+
 function deferred<T>() {
   let resolvePromise: ((value: T) => void) | undefined;
   const promise = new Promise<T>(resolve => {
@@ -124,13 +142,6 @@ function deferred<T>() {
   };
 }
 
-async function findStackedDialog(label: string): Promise<HTMLDialogElement> {
-  await waitFor(() => expect(document.querySelectorAll('dialog')[1]).toHaveAttribute('aria-label', label));
-  const dialog = document.querySelectorAll('dialog')[1];
-  if (!(dialog instanceof HTMLDialogElement)) throw new Error(`Expected stacked dialog: ${label}`);
-  return dialog;
-}
-
 describe('SaveAgentButton', () => {
   beforeEach(() => {
     agentSpec = {
@@ -142,6 +153,7 @@ describe('SaveAgentButton', () => {
     flushAgentSpec.mockReset();
     flushAgentSpec.mockResolvedValue(undefined);
     adoptAgentSpec.mockClear();
+    updateAgentSpec.mockClear();
   });
 
   it('is hidden when the shell is locked to a named agent', () => {
@@ -151,7 +163,10 @@ describe('SaveAgentButton', () => {
 
   it('shows on an empty new chat when a model is selected', () => {
     renderButton();
-    expect(screen.getByRole('button', { name: 'Save Agent' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save Agent' })).toHaveClass(
+      'bg-primary-button-bg',
+      'text-primary-button-text',
+    );
   });
 
   it('is hidden when the draft has no model', () => {
@@ -183,36 +198,38 @@ describe('SaveAgentButton', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save Agent' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Save agent' });
-    expect(dialog).toHaveClass('bg-card-bg', 'text-text-primary');
+    expect(dialog).toHaveClass('bg-card-bg', 'text-text-primary', 'md:ml-auto', 'md:mr-0', 'md:h-dvh');
     expect(within(dialog).getByLabelText('Agent name')).toHaveClass(
       'border-input-border',
       'bg-input-box-bg',
       'text-text-primary',
       'focus-visible:ring-focus-ring/40',
     );
-    expect(within(dialog).getByLabelText('Instructions')).toHaveClass(
-      'border-input-border',
-      'bg-input-box-bg',
-      'text-text-primary',
-      'focus-visible:ring-focus-ring/40',
-    );
-    expect(within(dialog).queryByText('file downloads:')).not.toBeInTheDocument();
-    expect(within(dialog).queryByText('compaction threshold:')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Description')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Edit Model' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Edit Runtime Config' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Edit Connectors' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Edit Skills' })).not.toBeInTheDocument();
   });
 
-  it('removes an MCP server directly from the save modal', async () => {
+  it('preserves configuration without exposing unsupported fields', async () => {
     const saveAgent = vi.fn(async (): Promise<SaveAgentResult> => ({ agentId: 'agent-1' }));
     renderButton({ saveAgent });
     fireEvent.click(screen.getByRole('button', { name: 'Save Agent' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Save agent' });
     fireEvent.change(within(dialog).getByLabelText('Agent name'), { target: { value: 'writer' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove GitHub' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() =>
       expect(saveAgent).toHaveBeenCalledWith(
-        expect.objectContaining({ agentSpec: expect.objectContaining({ mcpServers: [] }) }),
+        expect.objectContaining({
+          agentSpec: expect.objectContaining({
+            instructions: 'Be helpful.',
+            mcpServers: [{ id: 'github', name: 'GitHub' }],
+            skills: [{ id: 'research', name: 'Research' }],
+          }),
+        }),
       ),
     );
   });
@@ -220,7 +237,8 @@ describe('SaveAgentButton', () => {
   it('opens with the latest runtime spec after flushing pending picker edits', async () => {
     const pendingFlush = deferred<undefined>();
     flushAgentSpec.mockReturnValueOnce(pendingFlush.promise);
-    const rendered = renderButton();
+    const saveAgent = vi.fn(async (): Promise<SaveAgentResult> => ({ agentId: 'agent-1' }));
+    const rendered = renderButton({ saveAgent });
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Agent' }));
     await waitFor(() => expect(flushAgentSpec).toHaveBeenCalledOnce());
@@ -236,27 +254,71 @@ describe('SaveAgentButton', () => {
     pendingFlush.resolve(undefined);
 
     const dialog = await screen.findByRole('dialog', { name: 'Save agent' });
-    expect(within(dialog).getByLabelText('Instructions')).toHaveValue('Latest flushed instructions.');
-    expect(within(dialog).getByText('generative UI:').parentElement).toHaveTextContent('off');
+    fireEvent.change(within(dialog).getByLabelText('Agent name'), { target: { value: 'latest-agent' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Edit Connectors' }));
-    const mcpDialog = await findStackedDialog('Edit Connectors');
-    expect(await within(mcpDialog).findByRole('menuitemcheckbox', { name: /Slack/ })).toHaveAttribute(
-      'aria-checked',
-      'true',
+    await waitFor(() =>
+      expect(saveAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentSpec: expect.objectContaining({
+            instructions: 'Latest flushed instructions.',
+            mcpServers: [{ id: 'slack', name: 'Slack' }],
+            skills: [{ id: 'writing', name: 'Writing' }],
+            config: { generativeUi: { enabled: false } },
+          }),
+        }),
+      ),
     );
   });
 
   it('uses the drawer instruction draft when opening before debounce sync completes', async () => {
+    const saveAgent = vi.fn(async (): Promise<SaveAgentResult> => ({ agentId: 'agent-1' }));
     renderButton({
+      saveAgent,
       children: <SaveAgentButton instructionsOverride="Instructions currently visible in the drawer." />,
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Agent' }));
     const dialog = await screen.findByRole('dialog', { name: 'Save agent' });
+    fireEvent.change(within(dialog).getByLabelText('Agent name'), { target: { value: 'writer' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
 
-    expect(within(dialog).getByLabelText('Instructions')).toHaveValue('Instructions currently visible in the drawer.');
-    expect(within(dialog).getByText('gpt-4.1')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(saveAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentSpec: expect.objectContaining({ instructions: 'Instructions currently visible in the drawer.' }),
+        }),
+      ),
+    );
+  });
+
+  it('flushes the shared instruction draft when opening Save Agent', async () => {
+    const saveAgent = vi.fn(async (): Promise<SaveAgentResult> => ({ agentId: 'agent-1' }));
+    renderButton({
+      saveAgent,
+      children: (
+        <AgentConfigInstructionsProvider>
+          <SaveWithInstructionDraft />
+        </AgentConfigInstructionsProvider>
+      ),
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit instructions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Agent' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Save agent' });
+    fireEvent.change(within(dialog).getByLabelText('Agent name'), { target: { value: 'writer' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    expect(updateAgentSpec).toHaveBeenCalledWith({
+      instructions: 'Instructions currently visible in the drawer.',
+    });
+    await waitFor(() =>
+      expect(saveAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentSpec: expect.objectContaining({ instructions: 'Instructions currently visible in the drawer.' }),
+        }),
+      ),
+    );
   });
 
   it('labels an existing mutable binding as Update Agent and submits an update', async () => {
@@ -278,35 +340,16 @@ describe('SaveAgentButton', () => {
     );
   });
 
-  it('discards modal-only changes when closed', async () => {
+  it('discards drawer-only changes when closed', async () => {
     renderButton();
     fireEvent.click(screen.getByRole('button', { name: 'Save Agent' }));
     const dialog = await screen.findByRole('dialog', { name: 'Save agent' });
     fireEvent.change(within(dialog).getByLabelText('Agent name'), { target: { value: 'discard-me' } });
-    fireEvent.change(within(dialog).getByLabelText('Instructions'), { target: { value: 'Discarded instructions' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Agent' }));
     const reopened = await screen.findByRole('dialog', { name: 'Save agent' });
     expect(within(reopened).getByLabelText('Agent name')).toHaveValue('');
-    expect(within(reopened).getByLabelText('Instructions')).toHaveValue('Be helpful.');
-  });
-
-  it('opens model editing as a stacked dialog', async () => {
-    renderButton();
-    fireEvent.click(screen.getByRole('button', { name: 'Save Agent' }));
-    const saveDialog = await screen.findByRole('dialog', { name: 'Save agent' });
-    fireEvent.click(within(saveDialog).getByRole('button', { name: 'Edit Model' }));
-
-    const modelDialog = document.querySelectorAll('dialog')[1];
-    expect(modelDialog).toBeInstanceOf(HTMLDialogElement);
-    if (!(modelDialog instanceof HTMLDialogElement)) throw new Error('expected stacked model dialog');
-    expect(modelDialog).toHaveAttribute('aria-label', 'Edit model');
-    expect(saveDialog).toHaveAttribute('open');
-    expect(modelDialog).toHaveAttribute('open');
-    fireEvent.click(within(modelDialog).getByRole('button', { name: 'Anthropic' }));
-    fireEvent.click(await within(modelDialog).findByRole('option', { name: /claude-sonnet-4-6/ }));
-    expect(within(saveDialog).getByText('claude-sonnet-4-6')).toBeInTheDocument();
   });
 
   it('submits one explicit create request and adopts the persisted session spec', async () => {
@@ -318,10 +361,6 @@ describe('SaveAgentButton', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save Agent' }));
     const dialog = await screen.findByRole('dialog', { name: 'Save agent' });
     fireEvent.change(within(dialog).getByLabelText('Agent name'), { target: { value: 'my-agent' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Edit Runtime Config' }));
-    const runtimeDialog = await findStackedDialog('Edit Runtime Config');
-    fireEvent.click(within(runtimeDialog).getByRole('switch', { name: 'Generative UI' }));
-    fireEvent.click(within(runtimeDialog).getByRole('button', { name: 'Close' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(saveAgent).toHaveBeenCalledOnce());
@@ -332,9 +371,7 @@ describe('SaveAgentButton', () => {
         instructions: 'Be helpful.',
         mcpServers: [{ id: 'github', name: 'GitHub' }],
         skills: [{ id: 'research', name: 'Research' }],
-        config: {
-          generativeUi: { enabled: false },
-        },
+        config: undefined,
       },
       intent: 'create',
       sessionId: 'draft-1',
@@ -347,7 +384,7 @@ describe('SaveAgentButton', () => {
     );
   });
 
-  it('preserves opaque mount fields while adding catalog selections', async () => {
+  it('preserves opaque mount fields without exposing resource editors', async () => {
     agentSpec = {
       model: { name: 'openai/gpt-4.1' },
       mcpServers: [{ id: 'github', name: 'GitHub', enableTools: ['@read-only'], config: { project: 'sdk' } }],
@@ -358,68 +395,15 @@ describe('SaveAgentButton', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save Agent' }));
     const saveDialog = await screen.findByRole('dialog', { name: 'Save agent' });
     fireEvent.change(within(saveDialog).getByLabelText('Agent name'), { target: { value: 'preserved-agent' } });
-
-    fireEvent.click(within(saveDialog).getByRole('button', { name: 'Edit Connectors' }));
-    const mcpDialog = await findStackedDialog('Edit Connectors');
-    fireEvent.click(await within(mcpDialog).findByRole('checkbox', { name: 'Select Slack' }));
-    fireEvent.click(within(mcpDialog).getByRole('button', { name: 'Close' }));
-
-    fireEvent.click(within(saveDialog).getByRole('button', { name: 'Edit Skills' }));
-    const skillsDialog = await findStackedDialog('Edit skills');
-    fireEvent.click(await within(skillsDialog).findByRole('menuitemcheckbox', { name: /Writing/ }));
-    fireEvent.click(within(skillsDialog).getByRole('button', { name: 'Close' }));
     fireEvent.click(within(saveDialog).getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(saveAgent).toHaveBeenCalledOnce());
     expect(saveAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentSpec: expect.objectContaining({
-          mcpServers: [
-            { id: 'github', name: 'GitHub', enableTools: ['@read-only'], config: { project: 'sdk' } },
-            { id: 'slack', name: 'Slack' },
-          ],
-          skills: [
-            { id: 'research', name: 'Research', fqn: 'skills/research:1', config: { depth: 2 } },
-            { id: 'writing', name: 'Writing' },
-          ],
+          mcpServers: [{ id: 'github', name: 'GitHub', enableTools: ['@read-only'], config: { project: 'sdk' } }],
+          skills: [{ id: 'research', name: 'Research', fqn: 'skills/research:1', config: { depth: 2 } }],
         }),
-      }),
-    );
-  });
-
-  it('allows unavailable selected connectors and skills to be removed', async () => {
-    const saveAgent = vi.fn(async (): Promise<SaveAgentResult> => ({ agentId: 'agent-1' }));
-    renderButton({
-      saveAgent,
-      serverOverrides: {
-        getCapabilities: async () => ({
-          data: {
-            sandbox: { enabled: true },
-            skill: { enabled: false, reason: 'Configure a sandbox provider' },
-          },
-        }),
-        getMcp: async () => [{ id: 'github', name: 'GitHub', authenticated: false }],
-      },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Save Agent' }));
-    const saveDialog = await screen.findByRole('dialog', { name: 'Save agent' });
-    fireEvent.change(within(saveDialog).getByLabelText('Agent name'), { target: { value: 'trimmed-agent' } });
-
-    fireEvent.click(within(saveDialog).getByRole('button', { name: 'Edit Connectors' }));
-    const mcpDialog = await findStackedDialog('Edit Connectors');
-    fireEvent.click(await within(mcpDialog).findByRole('checkbox', { name: 'Deselect GitHub' }));
-    fireEvent.click(within(mcpDialog).getByRole('button', { name: 'Close' }));
-
-    fireEvent.click(within(saveDialog).getByRole('button', { name: 'Edit Skills' }));
-    const skillsDialog = await findStackedDialog('Edit skills');
-    fireEvent.click(await within(skillsDialog).findByRole('menuitemcheckbox', { name: /Research/ }));
-    fireEvent.click(within(skillsDialog).getByRole('button', { name: 'Close' }));
-    fireEvent.click(within(saveDialog).getByRole('button', { name: 'Save changes' }));
-
-    await waitFor(() => expect(saveAgent).toHaveBeenCalledOnce());
-    expect(saveAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentSpec: expect.objectContaining({ mcpServers: [], skills: [] }),
       }),
     );
   });
@@ -433,9 +417,6 @@ describe('SaveAgentButton', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
 
     expect(within(dialog).getByLabelText('Agent name')).toBeDisabled();
-    expect(within(dialog).getByLabelText('Instructions')).toBeDisabled();
-    expect(within(dialog).getByRole('button', { name: 'Edit Model' })).toBeDisabled();
-    expect(within(dialog).getByRole('button', { name: 'Edit Runtime Config' })).toBeDisabled();
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
 
     pending.resolve({ agentId: 'agent-1' });

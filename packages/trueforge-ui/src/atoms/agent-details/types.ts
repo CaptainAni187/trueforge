@@ -23,6 +23,7 @@ export type AgentSessionsProps = {
 export type AgentSessionListRowProps = {
   title: string;
   agentName?: string;
+  sourceType?: 'schedule';
   lastActivityAt: string;
   metrics: {
     totalTurns: number;
@@ -40,7 +41,12 @@ export type AgentSessionDetailHeaderProps = {
   createdAt?: string;
   view?: 'sessions' | null;
   onClose: () => void;
-  /** When set, shows Resume Chat / Resume Agent building. */
+  /**
+   * When set with `resumeLabel`, shows Resume Chat / Resume Agent building as a
+   * new-tab link (session deep link). Preferred over `onResume` when both are set.
+   */
+  resumeHref?: string;
+  /** In-shell resume fallback when no session deep link is available. */
   onResume?: () => void;
   /** Label for the resume action. */
   resumeLabel?: string;
@@ -49,6 +55,9 @@ export type AgentSessionDetailHeaderProps = {
 export type AgentSessionTurnHeaderProps = {
   turnNumber: number;
   totalTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedTokens?: number;
   durationMs?: number;
   totalCostInUsd?: number;
 };
@@ -86,6 +95,7 @@ export type AgentDetailsTabsProps = {
   activeTab: AgentDetailsTab;
   onTabChange: (tab: AgentDetailsTab) => void;
   showMetrics?: boolean;
+  showSchedules?: boolean;
 };
 
 export type AgentMetricsProps = {
@@ -121,6 +131,7 @@ export type AgentMetricChartProps = {
   graph?: AgentMetricGraph;
   definition: AgentMetricChartDefinition;
   error?: string;
+  colorIndex?: number;
 };
 
 export type AgentOverviewProps = {
