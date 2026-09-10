@@ -1,5 +1,11 @@
 # @truefoundry/trueforge
 
+## 0.2.0-rc.4
+
+### Patch Changes
+
+- 629b6e9: Show Created by (avatar + name) on Agents and Schedules tables when creator info is present.
+
 ## 0.2.0-rc.3
 
 ### Minor Changes
