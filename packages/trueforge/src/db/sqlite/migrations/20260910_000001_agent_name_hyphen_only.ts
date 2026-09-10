@@ -2,7 +2,7 @@ import { sql, type Kysely } from 'kysely';
 import { planAgentNameHyphenRenames, type AgentNameRow } from '../../planAgentNameHyphenRenames';
 
 /**
- * SQLite mirror of postgres/migrations/20260904_000002_agent_name_hyphen_only.ts.
+ * SQLite mirror of postgres/migrations/20260910_000001_agent_name_hyphen_only.ts.
  * Binding is `schedule.agent_id` → `agent(id)` — denormalized name updates need no FK toggle.
  */
 export async function up<TDatabase>(db: Kysely<TDatabase>): Promise<void> {
