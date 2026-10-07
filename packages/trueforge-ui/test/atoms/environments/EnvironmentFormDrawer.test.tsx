@@ -2,10 +2,13 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { AnalyticsProvider } from '@/analytics/AnalyticsProvider.js';
+import { AnalyticsEvents } from '@/analytics/events.js';
+import type { TrackAnalytics } from '@/analytics/types.js';
 import { EnvironmentFormDrawer } from '@/atoms/environments/EnvironmentFormDrawer.js';
 import { ToasterProvider } from '@/containers/ToasterContainer.js';
 import { ServerProvider } from '@/server/ServerContext.js';
-import type { SandboxEnvironmentServer } from '@/server/types.js';
+import type { SandboxEnvironment, SandboxEnvironmentServer } from '@/server/types.js';
 import { createMockAgentUIServer, createMockSandboxEnvironmentServer } from '../../server/mockServer.js';
 
 const originalShowModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal');
@@ -40,12 +43,34 @@ afterEach(() => {
   }
 });
 
+const editEnvironment: SandboxEnvironment = {
+  id: 'e1',
+  name: 'node-web',
+  description: '',
+  status: 'ready',
+  statusReason: null,
+  manifest: { name: 'node-web', description: '' },
+  createdBySubject: {
+    subjectId: 'user-1',
+    subjectType: 'user',
+    subjectDisplayName: 'alice',
+  },
+  createdAt: '2024-01-01T00:00:00.000Z',
+  updatedAt: '2024-01-01T00:00:00.000Z',
+};
+
 function renderDrawer({
+  mode = 'create',
+  environment,
   environmentOverrides = {},
   onSaved = vi.fn(),
+  track,
 }: {
+  mode?: 'create' | 'edit';
+  environment?: SandboxEnvironment;
   environmentOverrides?: Partial<SandboxEnvironmentServer>;
   onSaved?: () => void;
+  track?: TrackAnalytics;
 } = {}) {
   const createOrUpdateEnvironment = vi.fn(async ({ manifest }) => ({
     id: 'e1',
@@ -69,20 +94,29 @@ function renderDrawer({
   const server = createMockAgentUIServer({ sandboxEnvironments: environmentServer });
   const onOpenChange = vi.fn();
 
-  render(
+  const tree = (
     <ServerProvider server={server}>
       <ToasterProvider>
-        <EnvironmentFormDrawer open mode="create" onOpenChange={onOpenChange} onSaved={onSaved} />
+        <EnvironmentFormDrawer
+          open
+          mode={mode}
+          environment={environment}
+          onOpenChange={onOpenChange}
+          onSaved={onSaved}
+        />
       </ToasterProvider>
-    </ServerProvider>,
+    </ServerProvider>
   );
+  render(track != null ? <AnalyticsProvider track={track}>{tree}</AnalyticsProvider> : tree);
 
-  return { createOrUpdateEnvironment, onOpenChange, onSaved };
+  return { createOrUpdateEnvironment, onOpenChange, onSaved, track };
 }
 
 describe('EnvironmentFormDrawer', () => {
   it('saves UI form values', async () => {
-    const { createOrUpdateEnvironment, onSaved } = renderDrawer();
+    const track = vi.fn();
+    const { createOrUpdateEnvironment, onSaved } = renderDrawer({ track });
+    expect(screen.queryByRole('button', { name: 'YAML' })).not.toBeInTheDocument();
     const nameInput = screen.getByPlaceholderText('my-environment');
     fireEvent.change(nameInput, { target: { value: 'node-web' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
@@ -91,16 +125,22 @@ describe('EnvironmentFormDrawer', () => {
     });
     expect(createOrUpdateEnvironment.mock.calls[0]?.[0]?.manifest.name).toBe('node-web');
     expect(onSaved).toHaveBeenCalled();
+    expect(track).toHaveBeenCalledWith(AnalyticsEvents.Environment.CREATED, {
+      environment_name: 'node-web',
+      environment_id: 'e1',
+    });
   });
 
-  it('confirms when switching modes while dirty', async () => {
-    renderDrawer();
-    fireEvent.change(screen.getByPlaceholderText('my-environment'), { target: { value: 'dirty-env' } });
+  it('confirms when switching modes while dirty in edit', async () => {
+    renderDrawer({ mode: 'edit', environment: editEnvironment });
+    fireEvent.change(screen.getByPlaceholderText('write description ...'), {
+      target: { value: 'dirty description' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'YAML' }));
     expect(await screen.findByRole('button', { name: 'Yes' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Yes' }));
     await waitFor(() => {
-      expect(screen.queryByPlaceholderText('my-environment')).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText('write description ...')).not.toBeInTheDocument();
     });
     expect(screen.queryByRole('button', { name: 'Yes' })).not.toBeInTheDocument();
   });

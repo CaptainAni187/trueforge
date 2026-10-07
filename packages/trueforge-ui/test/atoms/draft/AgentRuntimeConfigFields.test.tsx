@@ -95,14 +95,19 @@ describe('AgentRuntimeConfigFields', () => {
     renderRuntimeFields();
 
     expect(screen.getByText('Environment')).toBeInTheDocument();
-    expect(
-      screen.getByText('Image, resources, network and secrets the sandbox starts with. Stored by name.'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Saved sandbox setup this agent uses when it runs.')).toBeInTheDocument();
 
     const manageBtn = screen.getByRole('button', { name: /Manage Environments/ });
     expect(manageBtn).toBeInTheDocument();
     fireEvent.click(manageBtn);
     expect(setEnvironmentsOpen).toHaveBeenCalledWith(true);
+  });
+
+  it('hides Manage Environments link when sandbox is off', () => {
+    renderRuntimeFields({ value: { sandbox: { enabled: false } } });
+
+    expect(screen.getByText('Environment')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Manage Environments/ })).not.toBeInTheDocument();
   });
 
   it('populates environment dropdown with default and ready environments only', async () => {

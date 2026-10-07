@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
+import { useTrackAnalytics } from '../../analytics/AnalyticsProvider.js';
+import { AnalyticsEvents } from '../../analytics/events.js';
 import { useToasterOptional } from '../../containers/ToasterContainer.js';
 import { useSandboxEnvironmentServer } from '../../server/ServerContext.js';
 import type { SandboxEnvironment, SandboxEnvironmentManifest } from '../../server/types.js';
@@ -34,6 +36,7 @@ type EditorMode = 'form' | 'yaml';
 export function EnvironmentFormDrawer({ open, onOpenChange, mode, environment, onSaved }: EnvironmentFormDrawerProps) {
   const environmentServer = useSandboxEnvironmentServer();
   const toaster = useToasterOptional();
+  const track = useTrackAnalytics();
   const [editorMode, setEditorMode] = useState<EditorMode>('form');
   const [form, setForm] = useState<EnvironmentFormValues>(() => manifestToFormValues(defaultEnvironmentManifest()));
   const [yamlText, setYamlText] = useState(() => manifestToYaml(defaultEnvironmentManifest()));
@@ -122,7 +125,11 @@ export function EnvironmentFormDrawer({ open, onOpenChange, mode, environment, o
 
     setSaving(true);
     try {
-      await environmentServer.createOrUpdateEnvironment({ manifest });
+      const saved = await environmentServer.createOrUpdateEnvironment({ manifest });
+      track(mode === 'create' ? AnalyticsEvents.Environment.CREATED : AnalyticsEvents.Environment.EDITED, {
+        environment_name: saved.name,
+        environment_id: saved.id,
+      });
       toaster?.showSuccess({
         title: mode === 'create' ? 'Environment created' : 'Environment updated',
       });
@@ -143,35 +150,41 @@ export function EnvironmentFormDrawer({ open, onOpenChange, mode, environment, o
         open={open}
         onOpenChange={onOpenChange}
         title={title}
-        description="Configure the environment as a form or edit its manifest directly."
+        description={
+          mode === 'create'
+            ? 'Configure the environment.'
+            : 'Configure the environment as a form or edit its manifest directly.'
+        }
         size="xl"
         headerActions={
-          <div className="inline-flex shrink-0 rounded-md bg-secondary-bg p-0.5 border border-border">
-            <button
-              type="button"
-              className={cn(
-                'rounded-sm px-2.5 py-1 text-xs font-medium transition-colors',
-                editorMode === 'form'
-                  ? 'bg-primary-bg text-text-primary shadow-xs'
-                  : 'text-text-secondary hover:text-text-primary',
-              )}
-              onClick={() => requestSwitch('form')}
-            >
-              UI Form
-            </button>
-            <button
-              type="button"
-              className={cn(
-                'rounded-sm px-2.5 py-1 text-xs font-medium transition-colors',
-                editorMode === 'yaml'
-                  ? 'bg-primary-bg text-text-primary shadow-xs'
-                  : 'text-text-secondary hover:text-text-primary',
-              )}
-              onClick={() => requestSwitch('yaml')}
-            >
-              YAML
-            </button>
-          </div>
+          mode === 'edit' ? (
+            <div className="inline-flex shrink-0 rounded-md bg-secondary-bg p-0.5 border border-border">
+              <button
+                type="button"
+                className={cn(
+                  'rounded-sm px-2.5 py-1 text-xs font-medium transition-colors',
+                  editorMode === 'form'
+                    ? 'bg-primary-bg text-text-primary shadow-xs'
+                    : 'text-text-secondary hover:text-text-primary',
+                )}
+                onClick={() => requestSwitch('form')}
+              >
+                UI Form
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  'rounded-sm px-2.5 py-1 text-xs font-medium transition-colors',
+                  editorMode === 'yaml'
+                    ? 'bg-primary-bg text-text-primary shadow-xs'
+                    : 'text-text-secondary hover:text-text-primary',
+                )}
+                onClick={() => requestSwitch('yaml')}
+              >
+                YAML
+              </button>
+            </div>
+          ) : undefined
         }
         footer={
           <div className="flex justify-end gap-2">

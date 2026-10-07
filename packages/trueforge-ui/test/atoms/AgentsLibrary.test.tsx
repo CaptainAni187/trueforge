@@ -4,6 +4,8 @@ import type { ReactNode } from 'react';
 import { useEffect } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { AnalyticsProvider } from '@/analytics/AnalyticsProvider.js';
+import { AnalyticsEvents } from '@/analytics/events.js';
 import { AgentsLibrary } from '@/atoms/AgentsLibrary.js';
 import { AgentsLibraryButton } from '@/atoms/AgentsLibraryButton.js';
 import { CenteredModal } from '@/atoms/primitives/CenteredModal.js';
@@ -80,18 +82,21 @@ function renderLibrary(
   {
     server = mockServer(),
     agentConfig,
+    track,
   }: {
     server?: AgentUIServer;
     agentConfig?: Parameters<typeof ShellModeProvider>[0]['agentConfig'];
+    track?: (eventName: string, data?: Record<string, string | number | boolean | undefined>) => void;
   } = {},
 ) {
-  return render(
+  const tree = (
     <SlotsProvider>
       <ServerProvider server={server}>
         <ShellModeProvider agentConfig={agentConfig}>{ui}</ShellModeProvider>
       </ServerProvider>
-    </SlotsProvider>,
+    </SlotsProvider>
   );
+  return render(track != null ? <AnalyticsProvider track={track}>{tree}</AnalyticsProvider> : tree);
 }
 
 function LibraryHarness({ children, onSelectAgent }: { children?: ReactNode; onSelectAgent?: (name: string) => void }) {
@@ -140,6 +145,22 @@ describe('CenteredModal', () => {
 });
 
 describe('AgentsLibrary', () => {
+  it('shows a friendly load error instead of raw fetch failures', async () => {
+    const server = createMockAgentUIServer({
+      searchAgents: vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      }),
+    });
+    renderLibrary(<LibraryHarness />, { server });
+    fireEvent.click(screen.getByRole('button', { name: 'Open library' }));
+
+    expect(await screen.findByRole('heading', { name: "Couldn't load agents" })).toBeInTheDocument();
+    expect(screen.getByText('Check your connection and try again.')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to fetch')).not.toBeInTheDocument();
+    expect(screen.queryByText('Failed to load agents.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+
   it('opens agent details from the row only when the optional server is available', async () => {
     window.history.replaceState(null, '', '/library?theme=dark&sessionId=stale&view=sessions&s_sts=1&s_ets=2');
     const server = createMockAgentUIServer({
@@ -177,8 +198,9 @@ describe('AgentsLibrary', () => {
       { name: 'beta-agent', agentId: 'beta-agent' },
     ]);
     const onSelectAgent = vi.fn();
+    const track = vi.fn();
 
-    renderLibrary(<LibraryHarness onSelectAgent={onSelectAgent} />, { server });
+    renderLibrary(<LibraryHarness onSelectAgent={onSelectAgent} />, { server, track });
 
     fireEvent.click(screen.getByRole('button', { name: 'Open library' }));
     expect(screen.getByRole('heading', { name: 'Agents' })).toBeInTheDocument();
@@ -189,6 +211,11 @@ describe('AgentsLibrary', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Try agent beta-agent' }));
     expect(onSelectAgent).toHaveBeenCalledWith('beta-agent');
+    expect(track).toHaveBeenCalledWith(
+      AnalyticsEvents.Library.AGENT_TRIED,
+      expect.objectContaining({ agent_id: 'beta-agent', agent_name: 'beta-agent' }),
+    );
+    expect(track.mock.calls.some(call => call[0] === AnalyticsEvents.Library.CLOSED)).toBe(false);
     await waitFor(() => {
       expect(screen.queryByRole('heading', { name: 'Agents' })).not.toBeInTheDocument();
     });
@@ -587,31 +614,37 @@ describe('AgentsLibrary', () => {
   });
 
   it('closes via Escape', () => {
-    renderLibrary(<LibraryHarness />);
+    const track = vi.fn();
+    renderLibrary(<LibraryHarness />, { track });
 
     fireEvent.click(screen.getByRole('button', { name: 'Open library' }));
     expect(screen.getByRole('heading', { name: 'Agents' })).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.queryByRole('heading', { name: 'Agents' })).not.toBeInTheDocument();
+    expect(track).toHaveBeenCalledWith(AnalyticsEvents.Library.CLOSED, undefined);
   });
 });
 
 describe('AgentsLibraryButton', () => {
   it('opens the Agents panel from the trigger', async () => {
     const server = mockServer([{ name: 'alpha-agent', agentId: 'alpha-agent' }]);
+    const track = vi.fn();
 
     renderLibrary(
       <>
         <AgentsLibraryButton />
         <AgentsLibrary />
       </>,
-      { server },
+      { server, track },
     );
 
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }));
     expect(screen.getByRole('heading', { name: 'Agents' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Agents/ })).toHaveAttribute('aria-current', 'page');
+    expect(track).toHaveBeenCalledWith(AnalyticsEvents.Library.OPENED, undefined);
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }));
+    expect(track).toHaveBeenCalledTimes(1);
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Try agent alpha-agent' })).toBeInTheDocument();
     });
